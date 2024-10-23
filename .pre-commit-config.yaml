@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.4.0  # Use the latest stable version
+    hooks:
+      - id: trailing-whitespace  # Removes trailing whitespace
+      - id: end-of-file-fixer     # Ensures files end with a newline
+      - id: check-yaml            # Checks that YAML files are valid
+
+  - repo: https://github.com/pre-commit/mirrors-autopep8
+    rev: v1.5.4  # Use the latest version
+    hooks:
+      - id: autopep8               # Automatically formats Python files
