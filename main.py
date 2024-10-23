@@ -110,7 +110,7 @@ def speak_response(text):
     engine.runAndWait()
 
 # Main loop
-# some comments and changes
+# some comments and changes try to make it more efficient
 
 
 def main():
