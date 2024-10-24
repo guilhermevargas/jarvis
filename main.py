@@ -8,6 +8,9 @@ import httpx
 import os
 from dotenv import load_dotenv
 import re
+import time
+from queue import Queue
+from threading import Thread
 
 # Load environment variables from .env file
 load_dotenv()
@@ -31,6 +34,11 @@ ACCESS_ID = os.getenv('TUYA_ACCESS_ID')  # Replace with your Tuya Access ID
 ACCESS_KEY = os.getenv('TUYA_ACCESS_KEY')  # Replace with your Tuya Access Key
 tuya_api = TuyaOpenAPI(ENDPOINT, ACCESS_ID, ACCESS_KEY)
 tuya_api.connect()
+
+conversation_active = False
+conversation_history = []
+command_queue = Queue()
+is_speaking = False
 
 # Function to recognize speech
 
@@ -85,56 +93,85 @@ def control_tuya_device(device_id, command):
     else:
         return "I didn't understand the command."
 
-# Function to speak the response
+# Modify the speak_response function
 
 
 def speak_response(text):
+    global is_speaking
+    is_speaking = True
     engine = pyttsx3.init()
-
-    # List available voices
-    voices = engine.getProperty('voices')
-
-    # Set to the first English voice found
-    for voice in voices:
-        if "english" in voice.name.lower():
-            engine.setProperty('voice', voice.id)
-            break
-
-    # Adjust speech rate (words per minute)
-    engine.setProperty('rate', 175)
-
-    # Adjust volume (0.0 to 1.0)
-    engine.setProperty('volume', 0.8)
-
     engine.say(text)
     engine.runAndWait()
+    is_speaking = False
 
-# Main loop
-# some comments and changes try to make it more efficient
+# Modify the recognize_speech_thread function
+
+
+def recognize_speech_thread():
+    global is_speaking
+    while True:
+        if not is_speaking:
+            command = recognize_speech()
+            if command:
+                command_queue.put(command)
+        else:
+            time.sleep(0.1)  # Short sleep when the system is speaking
 
 
 def main():
-    while True:
-        command = recognize_speech()
-        if command:
-            if "hello" in command:
-                # Remove the word 'Jarvis' before processing
-                clean_command = command.replace("hello", "").strip()
-                print("Processing command:", clean_command)
+    global conversation_active, conversation_history, is_speaking
 
-                if "turn on" in clean_command or "turn off" in clean_command:
-                    # Replace with your actual device ID
-                    device_id = os.getenv('TUYA_DEVICE_ID')
-                    tuya_response = control_tuya_device(
-                        device_id, clean_command)
-                    print(tuya_response)
-                    speak_response(tuya_response)  # Speak the Tuya response
+    # Start the speech recognition thread
+    speech_thread = Thread(target=recognize_speech_thread, daemon=True)
+    speech_thread.start()
+
+    while True:
+        if not command_queue.empty() and not is_speaking:
+            command = command_queue.get()
+
+            # Process the command
+            if not conversation_active:
+                print("Conversation not active. Checking for 'hello'...")
+                if "hello" in command.lower():
+                    conversation_active = True
+                    conversation_history = []
+                    clean_command = command.replace("hello", "").strip()
                 else:
-                    # Adjust max_tokens as needed
-                    gpt_response = get_gpt_response(
-                        clean_command, max_tokens=50)
-                    print("GPT Response:", gpt_response)
-                    speak_response(gpt_response)  # Speak the GPT response
+                    print("Conversation not active. Say 'hello' to start.")
+                    continue
+            else:
+                print("Conversation active. Processing command...")
+                clean_command = command
+
+            print("Processing command:", clean_command)
+            conversation_history.append(f"User: {clean_command}")
+
+            if "turn on" in clean_command or "turn off" in clean_command:
+                device_id = os.getenv('TUYA_DEVICE_ID')
+                tuya_response = control_tuya_device(device_id, clean_command)
+                print(tuya_response)
+                speak_response(tuya_response)
+                conversation_history.append(f"Assistant: {tuya_response}")
+            else:
+                # Include conversation history in the GPT prompt
+                full_prompt = "\n".join(
+                    conversation_history[-5:]) + f"\nAssistant: "
+                gpt_response = get_gpt_response(full_prompt, max_tokens=100)
+                print("GPT Response:", gpt_response)
+                speak_response(gpt_response)
+                conversation_history.append(f"Assistant: {gpt_response}")
+
+            # Reset the last interaction time
+            last_interaction_time = time.time()
+
+        elif conversation_active and (time.time() - last_interaction_time) > 60 and not is_speaking:
+            # End conversation after 60 seconds of inactivity
+            conversation_active = False
+            speak_response(
+                "The conversation has ended due to inactivity. Say 'hello' to start a new conversation.")
+            conversation_history = []
+        else:
+            time.sleep(0.1)  # Short sleep to prevent busy-waiting
 
 
 if __name__ == "__main__":
