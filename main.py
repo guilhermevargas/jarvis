@@ -11,6 +11,8 @@ import re
 import time
 from queue import Queue
 from threading import Thread
+import threading
+import queue
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +41,8 @@ conversation_active = False
 conversation_history = []
 command_queue = Queue()
 is_speaking = False
+interrupt_queue = queue.Queue()
+stop_speaking = threading.Event()
 
 # Function to recognize speech
 
@@ -100,9 +104,17 @@ def speak_response(text):
     global is_speaking
     is_speaking = True
     engine = pyttsx3.init()
+
+    def on_word(name, location, length):
+        if stop_speaking.is_set():
+            engine.stop()
+
+    engine.connect('started-word', on_word)
     engine.say(text)
     engine.runAndWait()
+
     is_speaking = False
+    stop_speaking.clear()
 
 # Modify the recognize_speech_thread function
 
@@ -115,7 +127,13 @@ def recognize_speech_thread():
             if command:
                 command_queue.put(command)
         else:
-            time.sleep(0.1)  # Short sleep when the system is speaking
+            # Check for interrupt commands
+            interrupt_command = recognize_speech(timeout=1)
+            if interrupt_command and interrupt_command.lower() in ["stop", "enough", "ok"]:
+                interrupt_queue.put(interrupt_command)
+                stop_speaking.set()
+
+# Modify the main function
 
 
 def main():
@@ -136,6 +154,7 @@ def main():
                     conversation_active = True
                     conversation_history = []
                     clean_command = command.replace("hello", "").strip()
+                    speak_response("Hello! How can I help you today?")
                 else:
                     print("Conversation not active. Say 'hello' to start.")
                     continue
@@ -153,13 +172,20 @@ def main():
                 speak_response(tuya_response)
                 conversation_history.append(f"Assistant: {tuya_response}")
             else:
-                # Include conversation history in the GPT prompt
                 full_prompt = "\n".join(
                     conversation_history[-5:]) + f"\nAssistant: "
                 gpt_response = get_gpt_response(full_prompt, max_tokens=100)
                 print("GPT Response:", gpt_response)
+
                 speak_response(gpt_response)
-                conversation_history.append(f"Assistant: {gpt_response}")
+
+                if not interrupt_queue.empty():
+                    interrupt_command = interrupt_queue.get()
+                    print(f"Interrupted with: {interrupt_command}")
+                    conversation_history.append(
+                        f"Assistant: {gpt_response} (interrupted)")
+                else:
+                    conversation_history.append(f"Assistant: {gpt_response}")
 
             # Reset the last interaction time
             last_interaction_time = time.time()
